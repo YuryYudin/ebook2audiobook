@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- allow-jit: numba compiles machine code at runtime inside the python env -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- standard entitlement for Tauri/WebKit windows -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>

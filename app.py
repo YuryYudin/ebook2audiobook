@@ -91,6 +91,15 @@ def register_dlls()->str|bool:
     return False
 
 def main()->None:
+    if os.environ.get('E2A_BUNDLE') == '1':
+        try:
+            import espeakng_loader
+            from phonemizer.backend.espeak.wrapper import EspeakWrapper
+            EspeakWrapper.set_library(espeakng_loader.get_library_path())
+            EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+        except ImportError as e:
+            print(f'WARNING: bundled espeak-ng is unavailable: {e}')
+
     wsl_cmd = ''
     wsl_extra = ''
     if os.environ.get('DOCKER_IN_WSL', '0') == '1' and os.environ.get('DOCKER_DESKTOP', '0') == '0' and os.environ.get('PODMAN_DESKTOP', '0') == '0':
@@ -268,13 +277,18 @@ Default to config.json model.""")
         manager = DeviceInstaller()
         device_info_str = manager.check_device_info(args['script_mode'])
         if args['script_mode'] == NATIVE:
-            if manager.install_device_packages(device_info_str) == 1:
-                error = f'Error: Could not installed device packages!'
-                print(error)
-                sys.exit(1)
-            result = manager.install_python_packages()
-            if result == 1:
-                sys.exit(1)
+            if os.environ.get('E2A_BUNDLE') == '1':
+                # pre-provisioned portable bundle: the environment is frozen,
+                # skip the runtime self-repair (device + pip package checks).
+                print('portable bundle mode - skipping runtime package self-repair')
+            else:
+                if manager.install_device_packages(device_info_str) == 1:
+                    error = f'Error: Could not installed device packages!'
+                    print(error)
+                    sys.exit(1)
+                result = manager.install_python_packages()
+                if result == 1:
+                    sys.exit(1)
         elif args['script_mode'] == FULL_DOCKER:
             if manager.check_voices() == 1:
                 error = f'Error: Could not download voices!'

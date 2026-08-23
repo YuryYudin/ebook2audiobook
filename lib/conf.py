@@ -2,6 +2,9 @@ import os, tempfile, sys, re
 
 debug_mode = False
 
+source_root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+data_root_dir = os.path.abspath(os.path.expanduser(os.environ.get('E2A_HOME', source_root_dir)))
+
 DEVICE_SYSTEM = sys.platform
 
 systems = {
@@ -39,7 +42,7 @@ fernet_data = b'gAAAAABptJuHZS_rMQRTmqzy-i5UFTh6HqcbklSV6oZsRpZXa7uSEveAMv1daIFz
 # ---------------------------------------------------------------------
 # Version and runtime config
 # ---------------------------------------------------------------------
-prog_version = (lambda: open('VERSION.txt').read().strip())()
+prog_version = (lambda: open(os.path.join(source_root_dir, 'VERSION.txt')).read().strip())()
 
 NATIVE = 'native'
 FULL_DOCKER = 'full_docker'
@@ -50,8 +53,8 @@ BUILD_DOCKER = 'build_docker'
 # ---------------------------------------------------------------------
 min_python_version = (3,10)
 max_python_version = (3,12)
-python_env_dir = os.path.abspath(os.path.join('.','python_env'))
-requirements_file = os.path.abspath(os.path.join('.','requirements.txt'))
+python_env_dir = os.path.join(source_root_dir, 'python_env')
+requirements_file = os.path.join(source_root_dir, 'requirements.txt')
 
 # ---------------------------------------------------------------------
 # Hardware mappings
@@ -65,7 +68,7 @@ devices = {
     "JETSON": {"proc": "jetson", "found": False},
 }
 
-device_info_json = '.device_info.json'
+device_info_json = os.path.join(data_root_dir, '.device_info.json')
 device_info_dict = {"gpu_count": 0, "gpu_backend": None}
 
 default_device = devices['CPU']['proc']
@@ -121,15 +124,19 @@ jetson_version_range = {"min": (5,1), "max": (6,1)}
 # Global paths
 # ---------------------------------------------------------------------
 root_dir = os.path.dirname(os.path.abspath(__file__))
-tmp_dir = os.path.abspath('tmp')
-run_dir = os.path.abspath('run')
+# Portable bundle support: when E2A_HOME is set, all writable data
+# (tmp, run, models, ebooks, voices, audiobooks) lives under it.
+# e.g. ~/Library/Application Support/ebook2audiobook for the macOS .app.
+# When unset, everything stays anchored to the source tree as before.
+tmp_dir = os.path.abspath(os.path.join(data_root_dir, 'tmp'))
+run_dir = os.path.abspath(os.path.join(data_root_dir, 'run'))
 gradio_cache_dir = os.path.normpath(os.path.join(run_dir, 'gradio'))
-models_dir = os.path.abspath('models')
-ebooks_dir = os.path.abspath('ebooks')
-voices_dir = os.path.abspath('voices')
+models_dir = os.path.abspath(os.path.join(data_root_dir, 'models'))
+ebooks_dir = os.path.abspath(os.path.join(data_root_dir, 'ebooks'))
+voices_dir = os.path.abspath(os.path.join(data_root_dir, 'voices'))
 voices_url = 'https://huggingface.co/datasets/ebook2audiobook/E2A-Voices/resolve/main/voices.zip?download=true'
 tts_dir = os.path.join(models_dir, 'tts')
-components_dir = os.path.abspath('components')
+components_dir = os.path.abspath(os.path.join(root_dir, os.pardir, 'components'))
 tempfile.tempdir = run_dir
 
 # ---------------------------------------------------------------------
@@ -209,9 +216,9 @@ interface_component_options = {
 # ---------------------------------------------------------------------
 # UI directories
 # ---------------------------------------------------------------------
-audiobooks_gradio_dir = os.path.abspath(os.path.join('audiobooks','gui','gradio'))
-audiobooks_host_dir = os.path.abspath(os.path.join('audiobooks','gui','host'))
-audiobooks_cli_dir = os.path.abspath(os.path.join('audiobooks','cli'))
+audiobooks_gradio_dir = os.path.abspath(os.path.join(data_root_dir, 'audiobooks','gui','gradio'))
+audiobooks_host_dir = os.path.abspath(os.path.join(data_root_dir, 'audiobooks','gui','host'))
+audiobooks_cli_dir = os.path.abspath(os.path.join(data_root_dir, 'audiobooks','cli'))
 
 # ---------------------------------------------------------------------
 # files and audio supported formats

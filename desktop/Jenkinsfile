@@ -1,0 +1,116 @@
+// Desktop (Tauri) build for ebook2audiobook on macOS ARM64.
+// Mirrors the RecapIt signing BKMs: Developer ID via APPLE_* credentials,
+// hardened runtime + entitlements, notarization via App Store Connect API key.
+pipeline {
+    agent { label 'mbook' }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+        timeout(time: 240, unit: 'MINUTES')
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        booleanParam(name: 'REBUILD_PAYLOAD', defaultValue: false, description: 'Force rebuild of the python/calibre payload cache')
+        booleanParam(name: 'SKIP_NOTARIZATION', defaultValue: false, description: 'Sign but do not notarize (faster iteration)')
+    }
+
+    environment {
+        RUST_BACKTRACE = '1'
+        CARGO_TERM_COLOR = 'always'
+        DEVELOPER_DIR = '/Applications/Xcode.app/Contents/Developer'
+    }
+
+    stages {
+
+        stage('Rust check') {
+            steps {
+                checkout scm
+                sh '''#!/bin/bash
+                    set -e
+                    export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+                    rustup default stable 2>/dev/null || true
+                    rustup target add aarch64-apple-darwin 2>/dev/null || true
+                    cd desktop/src-tauri
+                    cargo check
+                '''
+            }
+        }
+
+        stage('Engine payload (cached)') {
+            steps {
+                checkout scm
+                sh '''#!/bin/bash
+                    set -e
+                    export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+                    if [ "${REBUILD_PAYLOAD}" = "true" ]; then
+                        rm -f desktop/payload-cache/key
+                    fi
+                    desktop/ci/build-payload.sh
+                '''
+            }
+        }
+
+        stage('Tauri build') {
+            steps {
+                checkout scm
+                sh '''#!/bin/bash
+                    set -e
+                    export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+                    command -v cargo-tauri >/dev/null 2>&1 || cargo install tauri-cli --locked
+                    cd desktop/src-tauri
+                    cargo tauri build --target aarch64-apple-darwin --bundles app
+                '''
+            }
+        }
+
+        stage('Assemble + smoke') {
+            steps {
+                checkout scm
+                sh '''#!/bin/bash
+                    set -e
+                    export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+                    VERSION=$(cat VERSION.txt)
+                    BARE_APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ebook2audiobook.app"
+                    test -d "$BARE_APP" || { echo "tauri .app not found: $BARE_APP"; exit 1; }
+                    desktop/ci/assemble-macos.sh app "$BARE_APP" "$PWD/desktop/payload-cache" "$PWD"
+                '''
+            }
+        }
+
+        stage('Sign + DMG + Notarize') {
+            steps {
+                // Secrets are bound to env vars only; sign-notarize.sh never
+                // echoes them. Do not add `set -x` to that script.
+                withCredentials([
+                    string(credentialsId: 'apple-signing-identity', variable: 'APPLE_SIGNING_IDENTITY'),
+                    string(credentialsId: 'apple-certificate', variable: 'APPLE_CERT'),
+                    string(credentialsId: 'apple-certificate-password', variable: 'APPLE_CERT_PASSWORD'),
+                    string(credentialsId: 'apple-api-issuer', variable: 'APPLE_API_ISSUER'),
+                    string(credentialsId: 'apple-api-key-id', variable: 'APPLE_API_KEY_ID'),
+                    file(credentialsId: 'apple-api-key-p8', variable: 'APPLE_API_KEY_P8'),
+                ]) {
+                    sh '''#!/bin/bash
+                        set -e
+                        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+                        VERSION=$(cat VERSION.txt)
+                        export APP="$PWD/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ebook2audiobook.app"
+                        export OUT_DMG="$PWD/desktop/dist/ebook2audiobook-${VERSION}-macos-arm64.dmg"
+                        mkdir -p desktop/dist
+                        desktop/ci/sign-notarize.sh
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'desktop/dist/*.dmg', allowEmptyArchive: true, fingerprint: true
+            archiveArtifacts artifacts: 'desktop/dist/*.sha256', allowEmptyArchive: true
+        }
+        success { echo 'ebook2audiobook desktop build succeeded' }
+        failure { echo 'ebook2audiobook desktop build FAILED' }
+    }
+}

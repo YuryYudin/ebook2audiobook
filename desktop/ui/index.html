@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ebook2audiobook</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: -apple-system, "SF Pro Text", system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background: #f5f5f7;
+      color: #1d1d1f;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1e1e20; color: #f5f5f7; }
+    }
+    .card {
+      width: min(480px, 90vw);
+      text-align: center;
+      padding: 48px 40px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.7);
+      backdrop-filter: blur(12px);
+    }
+    @media (prefers-color-scheme: dark) {
+      .card { background: rgba(40,40,44,0.7); }
+    }
+    h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+    p.sub { color: #86868b; margin: 0 0 28px; font-size: 14px; }
+    .spinner {
+      width: 36px; height: 36px; margin: 0 auto 24px;
+      border-radius: 50%;
+      border: 3px solid rgba(0,122,255,0.2);
+      border-top-color: #007aff;
+      animation: spin 0.9s linear infinite;
+    }
+    .spinner.hidden, .failed-only.hidden { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status { font-size: 14px; margin-bottom: 20px; }
+    #tail {
+      display: none;
+      text-align: left;
+      font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+      background: rgba(0,0,0,0.06);
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 130px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin: 0 0 16px;
+    }
+    @media (prefers-color-scheme: dark) { #tail { background: rgba(0,0,0,0.35); } }
+    .btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    button {
+      font: inherit; font-size: 13px;
+      padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(0,122,255,0.4);
+      background: #007aff; color: #fff; cursor: pointer;
+    }
+    button.secondary { background: transparent; color: #007aff; }
+    button:active { transform: scale(0.98); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner" id="spinner"></div>
+    <h1>ebook2audiobook</h1>
+    <p class="sub">Starting the conversion engine&hellip; first launch may take a minute.</p>
+    <div id="status">status: starting</div>
+    <pre id="tail"></pre>
+    <div class="btns">
+      <button id="retry" class="hidden failed-only">Retry</button>
+      <button id="logs" class="hidden failed-only">View log</button>
+      <button id="browser" class="hidden failed-only">Open in browser</button>
+    </div>
+  </div>
+
+  <script>
+    const ENGINE_URL = "http://127.0.0.1:7860/";
+    let navigated = false;
+
+    function tauriInvoke() {
+      const t = window.__TAURI__;
+      if (t && t.core && t.core.invoke) return t.core.invoke.apply(null, arguments);
+      return Promise.reject(new Error("no tauri"));
+    }
+
+    function showFailed(tail) {
+      document.getElementById("spinner").classList.add("hidden");
+      document.querySelector("p.sub").textContent = "The engine failed to start.";
+      document.getElementById("status").textContent = "status: failed";
+      const tailEl = document.getElementById("tail");
+      if (tail) { tailEl.textContent = tail; tailEl.style.display = "block"; }
+      document.querySelectorAll(".failed-only").forEach(el => el.classList.remove("hidden"));
+    }
+
+    async function tick() {
+      try {
+        const s = await tauriInvoke("engine_status");
+        document.getElementById("status").textContent = "status: " + s.state;
+        if (s.state === "running" && !navigated) {
+          navigated = true;
+          window.location.replace(ENGINE_URL);
+          return;
+        }
+        if (s.state === "failed") {
+          showFailed(s.log_tail);
+          return;
+        }
+      } catch (e) {
+        // Not inside Tauri (plain browser during UI development): fall back
+        // to plain polling of the engine and redirect when it answers.
+        if (!navigated && await engineUp()) {
+          navigated = true;
+          window.location.replace(ENGINE_URL);
+          return;
+        }
+      }
+      setTimeout(tick, 600);
+    }
+
+    async function engineUp() {
+      try {
+        const r = await fetch(ENGINE_URL, { mode: "no-cors" });
+        return true;
+      } catch { return false; }
+    }
+
+    document.getElementById("retry").addEventListener("click", async () => {
+      document.querySelectorAll(".failed-only").forEach(el => el.classList.add("hidden"));
+      document.getElementById("tail").style.display = "none";
+      document.getElementById("spinner").classList.remove("hidden");
+      document.querySelector("p.sub").textContent = "Restarting the engine\u2026";
+      try { await tauriInvoke("restart_engine"); } catch {}
+      setTimeout(tick, 1000);
+    });
+    document.getElementById("logs").addEventListener("click", () => tauriInvoke("open_logs").catch(() => {}));
+    document.getElementById("browser").addEventListener("click", () => tauriInvoke("open_engine_in_browser").catch(() => {}));
+
+    tick();
+  </script>
+</body>
+</html>

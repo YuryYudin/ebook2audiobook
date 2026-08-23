@@ -1737,11 +1737,11 @@ class DeviceInstaller():
         import zipfile
         from huggingface_hub import hf_hub_download
         from tqdm import tqdm
-        voices_dir:Path = Path('./voices')
+        voices_path:Path = Path(voices_dir)
         def has_wav()->bool:
-            return any(voices_dir.rglob('*.wav'))
+            return any(voices_path.rglob('*.wav'))
         try:
-            voices_dir.mkdir(parents=True, exist_ok=True)
+            voices_path.mkdir(parents=True, exist_ok=True)
             if has_wav():
                 return 0
             parts:tuple = PurePosixPath(unquote(urlparse(voices_url).path)).parts
@@ -1749,13 +1749,13 @@ class DeviceInstaller():
             repo_id:str = f"{parts[i+1]}/{parts[i+2]}"
             r:int = parts.index('resolve')
             filename:str = '/'.join(parts[r+2:])
-            zip_path:Path = Path(hf_hub_download(repo_id=repo_id, filename=filename, repo_type='dataset', local_dir='.'))
+            zip_path:Path = Path(hf_hub_download(repo_id=repo_id, filename=filename, repo_type='dataset', local_dir=str(voices_path.parent)))
             print(f'Downloaded {zip_path.stat().st_size / (1024*1024):.1f} MB to {zip_path}')
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 members:list = zf.infolist()
                 desc:str = 'Extracting voices'
                 for member in tqdm(members, desc=desc, unit='file'):
-                    zf.extract(member, './')
+                    zf.extract(member, str(voices_path.parent))
             zip_path.unlink()
             return 0 if has_wav() else 1
         except Exception as e:

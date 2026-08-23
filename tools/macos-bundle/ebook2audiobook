@@ -1,0 +1,81 @@
+#!/bin/zsh
+
+set -u
+
+MACOS_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+CONTENTS_DIR="$(dirname "$MACOS_DIR")"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+APP_DIR="$RESOURCES_DIR/app"
+PYTHON_ENV="$RESOURCES_DIR/python_env"
+
+export E2A_BUNDLE=1
+export E2A_HOME="${E2A_HOME:-$HOME/Library/Application Support/ebook2audiobook}"
+export PATH="$PYTHON_ENV/bin:$RESOURCES_DIR/calibre.app/Contents/MacOS:/usr/bin:/bin:/usr/sbin:/sbin"
+export FONTCONFIG_FILE="$PYTHON_ENV/etc/fonts/fonts.conf"
+export FONTCONFIG_PATH="$PYTHON_ENV/etc/fonts"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+export REQUESTS_CA_BUNDLE="$PYTHON_ENV/ssl/cacert.pem"
+export SSL_CERT_FILE="$PYTHON_ENV/ssl/cacert.pem"
+unset PYTHONHOME PYTHONPATH
+
+cd "$APP_DIR" || exit 1
+
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "--version" ]]; then
+        exec "$PYTHON_ENV/bin/python" -u app.py --script_mode native "$@"
+    fi
+done
+
+mkdir -p \
+    "$E2A_HOME/audiobooks" \
+    "$E2A_HOME/ebooks" \
+    "$E2A_HOME/models/tessdata" \
+    "$E2A_HOME/run" \
+    "$E2A_HOME/tmp" \
+    "$E2A_HOME/voices" \
+    "$HOME/Library/Logs"
+
+if [[ ! -f "$E2A_HOME/models/tessdata/eng.traineddata" ]]; then
+    /usr/bin/ditto "$RESOURCES_DIR/seed/tessdata" "$E2A_HOME/models/tessdata"
+fi
+
+if [[ ! -f "$E2A_HOME/voices/eng/adult/male/KumarDahl.wav" ]]; then
+    /usr/bin/ditto "$RESOURCES_DIR/seed/voices" "$E2A_HOME/voices"
+fi
+
+for arg in "$@"; do
+    if [[ "$arg" == "--headless" ]]; then
+        exec "$PYTHON_ENV/bin/python" -u app.py --script_mode native "$@"
+    fi
+done
+
+LOG_FILE="$HOME/Library/Logs/ebook2audiobook.log"
+"$PYTHON_ENV/bin/python" -u app.py --script_mode native "$@" >>"$LOG_FILE" 2>&1 &
+APP_PID=$!
+
+cleanup() {
+    /usr/bin/pkill -TERM -P "$APP_PID" 2>/dev/null || true
+    /bin/kill -TERM "$APP_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for attempt in {1..120}; do
+    if ! /bin/kill -0 "$APP_PID" 2>/dev/null; then
+        /usr/bin/osascript -e "display alert \"ebook2audiobook failed to start\" message \"See $LOG_FILE for details.\" as critical" 2>/dev/null || true
+        wait "$APP_PID"
+        exit $?
+    fi
+    if /usr/bin/nc -z 127.0.0.1 7860 2>/dev/null; then
+        /usr/bin/open "http://127.0.0.1:7860/"
+        if /usr/bin/osascript -e 'display dialog "ebook2audiobook is running in your browser." buttons {"Quit ebook2audiobook"} default button 1 with title "ebook2audiobook"' >/dev/null 2>&1; then
+            exit 0
+        fi
+        wait "$APP_PID"
+        exit $?
+    fi
+    /bin/sleep 1
+done
+
+/usr/bin/osascript -e "display alert \"ebook2audiobook timed out\" message \"See $LOG_FILE for details.\" as critical" 2>/dev/null || true
+exit 1

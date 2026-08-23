@@ -1,0 +1,23 @@
+[package]
+name = "ebook2audiobook-desktop"
+version = "26.8.3"
+description = "Native desktop shell for the ebook2audiobook Python engine"
+authors = ["ebook2audiobook"]
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "ebook2audiobook_desktop"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[profile.release]
+strip = true
+lto = true
