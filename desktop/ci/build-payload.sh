@@ -84,7 +84,7 @@ echo "=== packing python_env ==="
 
 # voices were downloaded by install_python_packages()/check_voices() into
 # $E2A_HOME/voices — harvest as the first-run seed.
-if [ -d "$E2A_HOME/voices" ] && find "$E2A_HOME/voices" -name '*.wav' | grep -q .; then
+if [ -d "$E2A_HOME/voices" ] && [ -n "$(find "$E2A_HOME/voices" -name '*.wav' -print -quit 2>/dev/null)" ]; then
   mv "$E2A_HOME/voices" "$PAYLOAD_DIR/voices"
 else
   echo "FATAL: voices were not downloaded" >&2
