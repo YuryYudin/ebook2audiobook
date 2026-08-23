@@ -28,6 +28,9 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------- keychain
+if [ "${SIGN_MODE:-developer-id}" = "adhoc" ]; then
+  echo "=== SIGN_MODE=adhoc: skipping Developer ID keychain setup ==="
+else
 echo "=== preparing signing keychain ==="
 security delete-keychain "$KC" >/dev/null 2>&1 || true
 security create-keychain -p "$KC_PASS" "$KC"
@@ -93,17 +96,22 @@ if [ "${IDENTITY_CS:-0}" -lt 1 ] && [ "${LOGIN_CS:-0}" -lt 1 ]; then
   exit 1
 fi
 echo "keychain ready (identities present; names withheld)"
+fi # end SIGN_MODE=developer-id keychain setup
 
 # ---------------------------------------------------------------- codesign
-echo "=== signing app (Developer ID, hardened runtime) ==="
-codesign --force --deep --options runtime \
-  --sign "$APPLE_SIGNING_IDENTITY" \
-  --entitlements "$ENTITLEMENTS" \
-  --timestamp \
-  "$APP"
+echo "=== signing app (mode=${SIGN_MODE:-developer-id}) ==="
+if [ "${SIGN_MODE:-developer-id}" = "adhoc" ]; then
+  codesign --force --deep --sign - "$APP"
+else
+  codesign --force --deep --options runtime \
+    --sign "$APPLE_SIGNING_IDENTITY" \
+    --entitlements "$ENTITLEMENTS" \
+    --timestamp \
+    "$APP"
+fi
 
 codesign --verify --deep --strict "$APP" && echo "signature: valid"
-if codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
+if [ "${SIGN_MODE:-developer-id}" != "adhoc" ] && codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
   echo "FATAL: signature is adhoc — Developer ID signing did not take effect" >&2
   exit 1
 fi
@@ -112,8 +120,8 @@ fi
 echo "=== creating APFS dmg ==="
 "$(dirname "$0")/assemble-macos.sh" dmg "$APP" "$OUT_DMG"
 
-if [ "${SKIP_NOTARIZATION:-0}" = "1" ]; then
-  echo "=== skipping notarization (SKIP_NOTARIZATION=1) ==="
+if [ "${SIGN_MODE:-developer-id}" = "adhoc" ] || [ "${SKIP_NOTARIZATION:-0}" = "1" ]; then
+  echo "=== skipping notarization (SIGN_MODE=${SIGN_MODE:-developer-id} SKIP_NOTARIZATION=${SKIP_NOTARIZATION:-0}) ==="
 else
   echo "=== submitting for notarization ==="
   xcrun notarytool submit "$OUT_DMG" \

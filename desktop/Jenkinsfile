@@ -12,6 +12,7 @@ pipeline {
     }
 
     parameters {
+        choice(name: 'SIGN_MODE', choices: ['developer-id', 'adhoc'], description: 'Signing mode: developer-id (Apple creds) or adhoc (local runs only)')
         booleanParam(name: 'REBUILD_PAYLOAD', defaultValue: false, description: 'Force rebuild of the python/calibre payload cache')
         booleanParam(name: 'SKIP_NOTARIZATION', defaultValue: false, description: 'Sign but do not notarize (faster iteration)')
     }
