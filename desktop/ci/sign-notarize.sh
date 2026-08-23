@@ -34,24 +34,34 @@ security create-keychain -p "$KC_PASS" "$KC"
 security set-keychain-settings -lut 21600 "$KC"
 
 printf '%s' "$APPLE_CERT" > "$CERT_TMP"
+import_log="$(mktemp)"
 import_ok=0
 if head -c 11 "$CERT_TMP" | grep -q '^-----BEGIN'; then
   # PEM: try with password first (encrypted key), then unencrypted.
-  security import "$CERT_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >/dev/null 2>&1 \
-    || security import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign >/dev/null 2>&1 \
-    || import_ok=1
+  if ! security import "$CERT_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >"$import_log" 2>&1; then
+    security import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign >>"$import_log" 2>&1 || import_ok=1
+  fi
 else
-  # Assume base64-encoded .p12.
+  # Assume base64-encoded .p12 (macOS base64 decode flag is -D).
   B64_TMP="$(mktemp)"
-  printf '%s' "$APPLE_CERT" | base64 -D > "$B64_TMP" 2>/dev/null || true
-  security import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >/dev/null 2>&1 \
-    || import_ok=1
+  if ! printf '%s' "$APPLE_CERT" | base64 -D > "$B64_TMP" 2>>"$import_log"; then
+    echo "FATAL: base64 decode of certificate failed" >&2
+    cat "$import_log" >&2
+    rm -f "$B64_TMP"
+    exit 1
+  fi
+  CERT_KIND="$(file -b "$B64_TMP")"
+  echo "decoded certificate kind: ${CERT_KIND%%,*}"
+  security import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >>"$import_log" 2>&1 || import_ok=1
   rm -f "$B64_TMP"
 fi
 if [ "$import_ok" -ne 0 ]; then
-  echo "FATAL: certificate import failed (unsupported credential format?)" >&2
+  echo "FATAL: certificate import failed — security output follows (contains no secret material):" >&2
+  cat "$import_log" >&2
+  rm -f "$import_log"
   exit 1
 fi
+rm -f "$import_log"
 security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
 security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
 
