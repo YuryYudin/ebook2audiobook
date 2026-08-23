@@ -68,8 +68,12 @@ rm -f "$import_log"
 security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
 security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
 
-IDENTITY_COUNT="$(security find-identity -p codesigning -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
-if [ "${IDENTITY_COUNT:-0}" -lt 1 ]; then
+IDENTITY_ALL="$(security find-identity -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
+IDENTITY_CS="$(security find-identity -p codesigning -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
+CERT_COUNT="$(security find-certificate -a "$KC" 2>/dev/null | grep -c '"alis"' || echo 0)"
+KEY_COUNT="$(security find-key -a "$KC" 2>/dev/null | grep -c '"labl"' || echo 0)"
+echo "keychain contents: certs=${CERT_COUNT} keys=${KEY_COUNT} identities(all)=${IDENTITY_ALL} identities(codesigning)=${IDENTITY_CS}"
+if [ "${IDENTITY_CS:-0}" -lt 1 ]; then
   echo "FATAL: no valid codesigning identity after import" >&2
   exit 1
 fi
