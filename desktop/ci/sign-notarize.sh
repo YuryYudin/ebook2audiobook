@@ -42,18 +42,21 @@ if head -c 11 "$CERT_TMP" | grep -q '^-----BEGIN'; then
     security import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign >>"$import_log" 2>&1 || import_ok=1
   fi
 else
-  # Assume base64-encoded .p12 (macOS base64 decode flag is -D).
-  B64_TMP="$(mktemp)"
+  # Assume base64-encoded .p12. security(1) sniffs the container by file
+  # EXTENSION — a suffixless temp file yields "Unknown format in import".
+  # macOS base64 decode flag is -D.
+  B64_DIR="$(mktemp -d)"
+  B64_TMP="$B64_DIR/cert.p12"
   if ! printf '%s' "$APPLE_CERT" | base64 -D > "$B64_TMP" 2>>"$import_log"; then
     echo "FATAL: base64 decode of certificate failed" >&2
     cat "$import_log" >&2
-    rm -f "$B64_TMP"
+    rm -rf "$B64_DIR"
     exit 1
   fi
   CERT_KIND="$(file -b "$B64_TMP")"
   echo "decoded certificate kind: ${CERT_KIND%%,*}"
   security import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >>"$import_log" 2>&1 || import_ok=1
-  rm -f "$B64_TMP"
+  rm -rf "$B64_DIR"
 fi
 if [ "$import_ok" -ne 0 ]; then
   echo "FATAL: certificate import failed — security output follows (contains no secret material):" >&2
