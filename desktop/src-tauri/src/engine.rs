@@ -108,20 +108,21 @@ impl EngineSupervisor {
         {
             let _ = writeln!(log, "\n===== engine start {} =====", timestamp());
         }
-        let log_file = match fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)
-        {
-            Ok(f) => Stdio::from(f),
-            Err(_) => Stdio::null(),
+        let open_log = || {
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.log_path)
+                .map(Stdio::from)
+                .unwrap_or(Stdio::null())
         };
+        let log_file = open_log();
 
         let mut cmd = Command::new(&python);
         cmd.args(["-u", "app.py", "--script_mode", "native"]);
         cmd.current_dir(&app_dir);
         cmd.stdin(Stdio::null());
-        cmd.stdout(log_file.try_clone().unwrap_or(Stdio::null()));
+        cmd.stdout(open_log());
         cmd.stderr(log_file);
         self.apply_engine_env(&mut cmd);
 
