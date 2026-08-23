@@ -79,7 +79,17 @@ echo "keychain contents: certs=${CERT_COUNT} keys=${KEY_COUNT} identities(all)=$
 LOGIN_CS="$(security find-identity -p codesigning -v 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
 echo "agent keychain identities(codesigning)=${LOGIN_CS}"
 if [ "${IDENTITY_CS:-0}" -lt 1 ] && [ "${LOGIN_CS:-0}" -lt 1 ]; then
+  # Diagnostic: does the p12 itself carry a private key? (count only)
+  KEYS_IN_P12="$(printf '%s' "$APPLE_CERT" | base64 -D \
+    | openssl pkcs12 -nocerts -nodes -passin pass:"$APPLE_CERT_PASSWORD" 2>/dev/null \
+    | grep -c 'PRIVATE KEY' || echo 0)"
+  echo "private keys contained in the p12: ${KEYS_IN_P12}"
   echo "FATAL: no valid codesigning identity after import" >&2
+  if [ "${KEYS_IN_P12:-0}" -lt 1 ]; then
+    echo "  -> the apple-certificate credential contains certificates only." >&2
+    echo "  -> re-export the Developer ID p12 WITH the private key and update the credential," >&2
+    echo "     or provision the key in the agent user's login keychain." >&2
+  fi
   exit 1
 fi
 echo "keychain ready (identities present; names withheld)"
