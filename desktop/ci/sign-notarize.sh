@@ -36,11 +36,12 @@ security set-keychain-settings -lut 21600 "$KC"
 printf '%s' "$APPLE_CERT" > "$CERT_TMP"
 import_log="$(mktemp)"
 import_ok=0
+run_import() { security import "$@" >>"$import_log" 2>&1; }
 if head -c 11 "$CERT_TMP" | grep -q '^-----BEGIN'; then
   # PEM: try with password first (encrypted key), then unencrypted.
-  if ! security import "$CERT_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >"$import_log" 2>&1; then
-    security import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign >>"$import_log" 2>&1 || import_ok=1
-  fi
+  run_import "$CERT_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign \
+    || run_import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign \
+    || import_ok=1
 else
   # Assume base64-encoded .p12. security(1) sniffs the container by file
   # EXTENSION — a suffixless temp file yields "Unknown format in import".
@@ -53,11 +54,10 @@ else
     rm -rf "$B64_DIR"
     exit 1
   fi
-  CERT_KIND="$(file -b "$B64_TMP")"
-  echo "decoded certificate kind: ${CERT_KIND%%,*}"
-  security import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign >>"$import_log" 2>&1 || import_ok=1
+  run_import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign || import_ok=1
   rm -rf "$B64_DIR"
 fi
+echo "import summary: $(grep -E 'imported|identity' "$import_log" | tail -2 | tr '\n' ' ')"
 if [ "$import_ok" -ne 0 ]; then
   echo "FATAL: certificate import failed — security output follows (contains no secret material):" >&2
   cat "$import_log" >&2
@@ -73,7 +73,12 @@ IDENTITY_CS="$(security find-identity -p codesigning -v "$KC" 2>/dev/null | tail
 CERT_COUNT="$(security find-certificate -a "$KC" 2>/dev/null | grep -c '"alis"' || echo 0)"
 KEY_COUNT="$(security find-key -a "$KC" 2>/dev/null | grep -c '"labl"' || echo 0)"
 echo "keychain contents: certs=${CERT_COUNT} keys=${KEY_COUNT} identities(all)=${IDENTITY_ALL} identities(codesigning)=${IDENTITY_CS}"
-if [ "${IDENTITY_CS:-0}" -lt 1 ]; then
+
+# The p12 may be certificates-only (private key provisioned separately on the
+# agent). Fall back to the agent user's own keychain search list.
+LOGIN_CS="$(security find-identity -p codesigning -v 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
+echo "agent keychain identities(codesigning)=${LOGIN_CS}"
+if [ "${IDENTITY_CS:-0}" -lt 1 ] && [ "${LOGIN_CS:-0}" -lt 1 ]; then
   echo "FATAL: no valid codesigning identity after import" >&2
   exit 1
 fi
