@@ -151,9 +151,13 @@ else
   # self-contained sealed units — notary accepts them as-is (their internal
   # placeholder binaries are part of Calibre's own distribution). Prune them
   # from the sweep; only loose executables need individual signatures.
+  # `codesign --verify` passes for AD-HOC signatures too (conda/pip ship
+  # arm64 binaries ad-hoc signed — arm64 requires at least that to execute),
+  # and notarization rejects those. Only a Developer ID authority counts.
+  has_devid() { codesign -dv "$1" 2>&1 | grep -q "Authority=Developer ID"; }
   SIGNED_N=0
   while IFS= read -r bin; do
-    if ! codesign --verify "$bin" >/dev/null 2>&1; then
+    if ! has_devid "$bin"; then
       if ! codesign "${SIGN_ARGS[@]}" "$bin" >/dev/null 2>&1; then
         # Fat binary with an unsignable non-native slice: thin to arm64
         # (the bundle is arm64-only) and retry.
@@ -192,13 +196,13 @@ codesign --verify --deep --strict "$APP" && echo "signature: valid"
 if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
   UNSIGNED_LEFT=0
   while IFS= read -r bin; do
-    codesign --verify "$bin" >/dev/null 2>&1 || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "unsigned executable: $bin" >&2; }
+    has_devid "$bin" || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "no Developer ID signature: $bin" >&2; }
   done < <(find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
   if [ "$UNSIGNED_LEFT" -gt 0 ]; then
-    echo "FATAL: $UNSIGNED_LEFT Mach-O executables still unsigned" >&2
+    echo "FATAL: $UNSIGNED_LEFT Mach-O executables without a Developer ID signature" >&2
     exit 1
   fi
-  echo "all Mach-O executables signed"
+  echo "all Mach-O executables carry a Developer ID signature"
   if codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
     echo "FATAL: signature is adhoc — Developer ID signing did not take effect" >&2
     exit 1
