@@ -135,21 +135,38 @@ echo "=== signing app (mode=${SIGN_MODE:-developer-id}) ==="
 if [ "${SIGN_MODE:-developer-id}" = "adhoc" ]; then
   codesign --force --deep --sign - "$APP"
 else
-  # codesign --deep does NOT sign plain Mach-O executables in resource
-  # paths (python_env/bin/*) — it seals them as data, and notarization
-  # rejects them ("not signed with a valid Developer ID certificate").
-  # Correct order: sign every nested Mach-O individually (inside-out),
-  # then seal the bundle root LAST. Verified-valid binaries (e.g. the
-  # embedded, already-notarized calibre.app) are skipped.
+  # Notarization requires a Developer ID + hardened runtime + timestamp
+  # signature on every Mach-O EXECUTABLE; libraries (.so/.dylib) sealed as
+  # bundle resources are accepted without individual signatures (proven by
+  # the notary service log: only python_env/bin/* executables were flagged).
+  # codesign --deep does not sign plain executables in resource paths, so:
+  #   1. deep-seal the bundle (covers libraries + nested calibre.app),
+  #   2. individually sign every executable the deep pass left unsigned,
+  #   3. python interpreter gets the JIT entitlements (numba/torch),
+  #   4. plain re-seal of the root (nested content changed after step 1).
   SIGN_ARGS=(--force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY")
+  codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" --deep "$APP"
+
   SIGNED_N=0
   while IFS= read -r bin; do
     if ! codesign --verify "$bin" >/dev/null 2>&1; then
-      codesign "${SIGN_ARGS[@]}" "$bin" || { echo "FATAL: nested sign failed: $bin" >&2; exit 1; }
+      if ! codesign "${SIGN_ARGS[@]}" "$bin" >/dev/null 2>&1; then
+        # Fat binary with an unsignable non-native slice: thin to arm64
+        # (the bundle is arm64-only) and retry.
+        THIN="$(mktemp)"
+        if lipo -thin arm64 -output "$THIN" "$bin" 2>/dev/null; then
+          mv "$THIN" "$bin"
+        else
+          rm -f "$THIN"
+          echo "FATAL: nested executable sign failed: $bin" >&2
+          exit 1
+        fi
+        codesign "${SIGN_ARGS[@]}" "$bin" || { echo "FATAL: nested executable sign failed: $bin" >&2; exit 1; }
+      fi
       SIGNED_N=$((SIGNED_N + 1))
     fi
-  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O" | cut -d: -f1)
-  echo "nested binaries signed: $SIGNED_N"
+  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
+  echo "nested executables signed: $SIGNED_N"
 
   # The Python interpreter JITs (numba/torch): it alone needs the JIT
   # entitlements.
@@ -161,7 +178,7 @@ else
       "$PYTHON_BIN"
   fi
 
-  # Seal the bundle root last (no --deep: nested code is already signed).
+  # Nested content changed after the deep seal — re-seal the root (plain).
   codesign --force --options runtime --timestamp \
     --sign "$APPLE_SIGNING_IDENTITY" \
     "$APP"
@@ -171,13 +188,13 @@ codesign --verify --deep --strict "$APP" && echo "signature: valid"
 if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
   UNSIGNED_LEFT=0
   while IFS= read -r bin; do
-    codesign --verify "$bin" >/dev/null 2>&1 || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "unsigned: $bin" >&2; }
-  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O" | cut -d: -f1)
+    codesign --verify "$bin" >/dev/null 2>&1 || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "unsigned executable: $bin" >&2; }
+  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
   if [ "$UNSIGNED_LEFT" -gt 0 ]; then
-    echo "FATAL: $UNSIGNED_LEFT Mach-O binaries still unsigned" >&2
+    echo "FATAL: $UNSIGNED_LEFT Mach-O executables still unsigned" >&2
     exit 1
   fi
-  echo "all Mach-O binaries signed"
+  echo "all Mach-O executables signed"
   if codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
     echo "FATAL: signature is adhoc — Developer ID signing did not take effect" >&2
     exit 1
