@@ -156,14 +156,38 @@ if [ "${SIGN_MODE:-developer-id}" = "adhoc" ] || [ "${SKIP_NOTARIZATION:-0}" = "
   echo "=== skipping notarization (SIGN_MODE=${SIGN_MODE:-developer-id} SKIP_NOTARIZATION=${SKIP_NOTARIZATION:-0}) ==="
 else
   echo "=== submitting for notarization ==="
-  xcrun notarytool submit "$OUT_DMG" \
+  NOTARY_OUT="$(mktemp)"
+  if xcrun notarytool submit "$OUT_DMG" \
     --key "$APPLE_API_KEY_P8" \
     --key-id "$APPLE_API_KEY_ID" \
     --issuer "$APPLE_API_ISSUER" \
-    --wait --timeout 30m
-  echo "=== stapling ==="
-  xcrun stapler staple "$OUT_DMG"
-  xcrun stapler validate "$OUT_DMG" && echo "notarization: stapled + valid"
+    --wait --timeout 30m 2>&1 | tee "$NOTARY_OUT"; then
+    if grep -q "status: Accepted" "$NOTARY_OUT"; then
+      echo "=== stapling ==="
+      xcrun stapler staple "$OUT_DMG"
+      xcrun stapler validate "$OUT_DMG" && echo "notarization: stapled + valid"
+    else
+      echo "=== notarization NOT accepted — fetching service log ==="
+      SUBMIT_ID="$(grep -oE 'id: [0-9a-f-]{36}' "$NOTARY_OUT" | head -1 | cut -d' ' -f2)"
+      if [ -n "$SUBMIT_ID" ]; then
+        xcrun notarytool log "$SUBMIT_ID" \
+          --key "$APPLE_API_KEY_P8" \
+          --key-id "$APPLE_API_KEY_ID" \
+          --issuer "$APPLE_API_ISSUER" 2>/dev/null \
+          | python3 -c "import json,sys; d=json.load(sys.stdin); [print(i.get('severity',''), '|', i.get('path','(app)'), '|', i.get('message','')) for i in d.get('issues',[])]" \
+          || echo "(log fetch failed)"
+      fi
+      rm -f "$NOTARY_OUT"
+      echo "FATAL: notarization was not accepted" >&2
+      exit 1
+    fi
+  else
+    echo "=== notarytool submit/wait failed ==="
+    cat "$NOTARY_OUT" >&2
+    rm -f "$NOTARY_OUT"
+    exit 1
+  fi
+  rm -f "$NOTARY_OUT"
 fi
 
 echo "=== artifact ==="
