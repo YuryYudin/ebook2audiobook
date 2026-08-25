@@ -18,7 +18,10 @@ OUT_DMG="${OUT_DMG:?OUT_DMG required}"
 ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/src-tauri/entitlements.plist"
 
 CERT_TMP="$(mktemp)"
-KC="$PWD/e2a-sign.keychain-db"
+# Keychain must live directly under $HOME (as in the proven redrafter recipe),
+# not in the workspace — workspace-located keychains accept certificates but
+# not private keys on this agent.
+KC="$HOME/e2a-signing.keychain-db"
 KC_PASS="$(openssl rand -base64 24)"
 cleanup() {
   rm -f "$CERT_TMP"
@@ -88,10 +91,13 @@ rm -f "$import_log"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC" >/dev/null
 
 IDENTITY_ALL="$(security find-identity -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
-IDENTITY_CS="$(security find-identity -p codesigning -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
+IDENTITY_CS="$(security find-identity -v -p codesigning "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
 CERT_COUNT="$(security find-certificate -a "$KC" 2>/dev/null | grep -c '"alis"' || echo 0)"
-KEY_COUNT="$(security find-key -a "$KC" 2>/dev/null | grep -c '"labl"' || echo 0)"
+KEY_COUNT="$(security find-key "$KC" 2>/dev/null | grep -c '"labl"' || echo 0)"
 echo "keychain contents: certs=${CERT_COUNT} keys=${KEY_COUNT} identities(all)=${IDENTITY_ALL} identities(codesigning)=${IDENTITY_CS}"
+# Raw find-identity output (identity names are masked by Jenkins if they match
+# credential values; nothing secret is printed by security here).
+security find-identity -v -p codesigning "$KC" 2>&1 | tail -3
 
 # The p12 may be certificates-only (private key provisioned separately on the
 # agent). Fall back to the agent user's own keychain search list.
@@ -101,7 +107,7 @@ if [ "${IDENTITY_CS:-0}" -lt 1 ] && [ "${LOGIN_CS:-0}" -lt 1 ]; then
   # Diagnostic: does the p12 itself carry a private key? (count only)
   KEYS_IN_P12="$(printf '%s' "$APPLE_CERT" | base64 -D \
     | openssl pkcs12 -nocerts -nodes -passin pass:"$APPLE_CERT_PASSWORD" 2>/dev/null \
-    | grep -c 'PRIVATE KEY' || echo 0)"
+    | grep -c 'PRIVATE KEY' || true)"
   echo "private keys contained in the p12: ${KEYS_IN_P12}"
   echo "FATAL: no valid codesigning identity after import" >&2
   if [ "${KEYS_IN_P12:-0}" -lt 1 ]; then
