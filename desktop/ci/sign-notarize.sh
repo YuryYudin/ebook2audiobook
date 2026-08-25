@@ -166,12 +166,14 @@ else
     out="$(codesign -dv "$1" 2>&1)"
     ! printf '%s\n' "$out" | grep -qE "^TeamIdentifier=[A-Za-z0-9]{6,}$"
   }
-  # Executable list. NB: file(1) emits extra "(for architecture …)" lines for
-  # universal binaries — those must be dropped or the cut yields phantom
-  # paths and the real fat binaries never get signed.
-  list_executables() {
+  # Mach-O list: notary requires a Developer ID signature on EVERY Mach-O
+  # file — executables AND dylibs/.so (the service log flags python_env/lib/
+  # dylibs just like bin/ executables). NB: file(1) emits extra "(for
+  # architecture …)" lines for universal binaries — those must be dropped or
+  # the cut yields phantom paths and the real fat binaries never get signed.
+  list_macho() {
     find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null \
-      | grep -E "Mach-O.*executable|Mach-O universal" \
+      | grep -E "Mach-O" \
       | cut -d: -f1 \
       | grep -v " (for architecture" \
       | sort -u
@@ -194,8 +196,8 @@ else
       fi
       SIGNED_N=$((SIGNED_N + 1))
     fi
-  done < <(list_executables)
-  echo "nested executables signed: $SIGNED_N"
+  done < <(list_macho)
+  echo "nested Mach-O signed: $SIGNED_N"
 
   # The Python interpreter JITs (numba/torch): it alone needs the JIT
   # entitlements.
@@ -228,12 +230,12 @@ if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
         echo "--- file(1): $(file -b "$bin")" >&2
       fi
     fi
-  done < <(list_executables)
+  done < <(list_macho)
   if [ "$UNSIGNED_LEFT" -gt 0 ]; then
-    echo "FATAL: $UNSIGNED_LEFT Mach-O executables without a Developer ID signature" >&2
+    echo "FATAL: $UNSIGNED_LEFT Mach-O files without a Developer ID signature" >&2
     exit 1
   fi
-  echo "all Mach-O executables carry a Developer ID signature"
+  echo "all Mach-O files carry a Developer ID signature"
   if codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
     echo "FATAL: signature is adhoc — Developer ID signing did not take effect" >&2
     exit 1
