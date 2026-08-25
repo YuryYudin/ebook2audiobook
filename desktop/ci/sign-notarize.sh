@@ -135,17 +135,53 @@ echo "=== signing app (mode=${SIGN_MODE:-developer-id}) ==="
 if [ "${SIGN_MODE:-developer-id}" = "adhoc" ]; then
   codesign --force --deep --sign - "$APP"
 else
-  codesign --force --deep --options runtime \
+  # codesign --deep does NOT sign plain Mach-O executables in resource
+  # paths (python_env/bin/*) — it seals them as data, and notarization
+  # rejects them ("not signed with a valid Developer ID certificate").
+  # Correct order: sign every nested Mach-O individually (inside-out),
+  # then seal the bundle root LAST. Verified-valid binaries (e.g. the
+  # embedded, already-notarized calibre.app) are skipped.
+  SIGN_ARGS=(--force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY")
+  SIGNED_N=0
+  while IFS= read -r bin; do
+    if ! codesign --verify "$bin" >/dev/null 2>&1; then
+      codesign "${SIGN_ARGS[@]}" "$bin" || { echo "FATAL: nested sign failed: $bin" >&2; exit 1; }
+      SIGNED_N=$((SIGNED_N + 1))
+    fi
+  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O" | cut -d: -f1)
+  echo "nested binaries signed: $SIGNED_N"
+
+  # The Python interpreter JITs (numba/torch): it alone needs the JIT
+  # entitlements.
+  PYTHON_BIN="$APP/Contents/Resources/python_env/bin/python3.12"
+  if [ -f "$PYTHON_BIN" ]; then
+    codesign --force --options runtime --timestamp \
+      --sign "$APPLE_SIGNING_IDENTITY" \
+      --entitlements "$ENTITLEMENTS" \
+      "$PYTHON_BIN"
+  fi
+
+  # Seal the bundle root last (no --deep: nested code is already signed).
+  codesign --force --options runtime --timestamp \
     --sign "$APPLE_SIGNING_IDENTITY" \
-    --entitlements "$ENTITLEMENTS" \
-    --timestamp \
     "$APP"
 fi
 
 codesign --verify --deep --strict "$APP" && echo "signature: valid"
-if [ "${SIGN_MODE:-developer-id}" != "adhoc" ] && codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
-  echo "FATAL: signature is adhoc — Developer ID signing did not take effect" >&2
-  exit 1
+if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
+  UNSIGNED_LEFT=0
+  while IFS= read -r bin; do
+    codesign --verify "$bin" >/dev/null 2>&1 || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "unsigned: $bin" >&2; }
+  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O" | cut -d: -f1)
+  if [ "$UNSIGNED_LEFT" -gt 0 ]; then
+    echo "FATAL: $UNSIGNED_LEFT Mach-O binaries still unsigned" >&2
+    exit 1
+  fi
+  echo "all Mach-O binaries signed"
+  if codesign -dvv "$APP" 2>&1 | grep -q "flags=0x2(adhoc)"; then
+    echo "FATAL: signature is adhoc — Developer ID signing did not take effect" >&2
+    exit 1
+  fi
 fi
 
 # ---------------------------------------------------------------- dmg + notarize
