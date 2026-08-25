@@ -147,6 +147,10 @@ else
   SIGN_ARGS=(--force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY")
   codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" --deep "$APP"
 
+  # Nested .app bundles (the embedded, already-notarized calibre.app) are
+  # self-contained sealed units — notary accepts them as-is (their internal
+  # placeholder binaries are part of Calibre's own distribution). Prune them
+  # from the sweep; only loose executables need individual signatures.
   SIGNED_N=0
   while IFS= read -r bin; do
     if ! codesign --verify "$bin" >/dev/null 2>&1; then
@@ -165,7 +169,7 @@ else
       fi
       SIGNED_N=$((SIGNED_N + 1))
     fi
-  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
+  done < <(find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
   echo "nested executables signed: $SIGNED_N"
 
   # The Python interpreter JITs (numba/torch): it alone needs the JIT
@@ -189,7 +193,7 @@ if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
   UNSIGNED_LEFT=0
   while IFS= read -r bin; do
     codesign --verify "$bin" >/dev/null 2>&1 || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "unsigned executable: $bin" >&2; }
-  done < <(find "$APP/Contents" -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
+  done < <(find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
   if [ "$UNSIGNED_LEFT" -gt 0 ]; then
     echo "FATAL: $UNSIGNED_LEFT Mach-O executables still unsigned" >&2
     exit 1
