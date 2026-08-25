@@ -19,22 +19,39 @@ ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/src-tauri/entitlements.plist"
 
 CERT_TMP="$(mktemp)"
 KC="$PWD/e2a-sign.keychain-db"
-KC_PASS="$(openssl rand -hex 24 2>/dev/null || head -c 48 /dev/urandom | xxhsum | cut -d' ' -f1 || true)"
-[ -n "$KC_PASS" ] || { echo "FATAL: cannot generate keychain password"; exit 1; }
+KC_PASS="$(openssl rand -base64 24)"
 cleanup() {
   rm -f "$CERT_TMP"
+  if [ -n "${ORIG_KEYCHAINS:-}" ]; then
+    security list-keychains -d user -s $ORIG_KEYCHAINS 2>/dev/null || true
+  fi
   security delete-keychain "$KC" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 # ---------------------------------------------------------------- keychain
+# Recipe proven by the redrafter pipeline on the same agent: a dedicated,
+# UNLOCKED keychain + the Developer ID G2 intermediate (macOS ships the root
+# but not G2, so a keychain with only the leaf cannot build the chain) + an
+# explicit partition list with -s (headless codesign access, else
+# errSecInternalComponent). Importing into a locked keychain silently drops
+# the private key (certs import, key does not).
 if [ "${SIGN_MODE:-developer-id}" = "adhoc" ]; then
   echo "=== SIGN_MODE=adhoc: skipping Developer ID keychain setup ==="
 else
 echo "=== preparing signing keychain ==="
+ORIG_KEYCHAINS="$(security list-keychains -d user | sed 's/[" ]//g')"
 security delete-keychain "$KC" >/dev/null 2>&1 || true
 security create-keychain -p "$KC_PASS" "$KC"
 security set-keychain-settings -lut 21600 "$KC"
+security unlock-keychain -p "$KC_PASS" "$KC"
+security list-keychains -d user -s "$KC" $ORIG_KEYCHAINS
+
+echo "=== installing Developer ID G2 intermediate (chain completion) ==="
+G2_TMP="$(mktemp -d)/DeveloperIDG2CA.cer"
+curl -fsSL -o "$G2_TMP" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+security import "$G2_TMP" -k "$KC" -T /usr/bin/codesign
+rm -f "$G2_TMP"
 
 printf '%s' "$APPLE_CERT" > "$CERT_TMP"
 import_log="$(mktemp)"
@@ -42,22 +59,22 @@ import_ok=0
 run_import() { security import "$@" >>"$import_log" 2>&1; }
 if head -c 11 "$CERT_TMP" | grep -q '^-----BEGIN'; then
   # PEM: try with password first (encrypted key), then unencrypted.
-  run_import "$CERT_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign \
-    || run_import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign \
+  run_import "$CERT_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security \
+    || run_import "$CERT_TMP" -k "$KC" -T /usr/bin/codesign -T /usr/bin/security \
     || import_ok=1
 else
   # Assume base64-encoded .p12. security(1) sniffs the container by file
   # EXTENSION — a suffixless temp file yields "Unknown format in import".
-  # macOS base64 decode flag is -D.
+  # openssl base64 -d -A matches the proven recipe (single-line input).
   B64_DIR="$(mktemp -d)"
-  B64_TMP="$B64_DIR/cert.p12"
-  if ! printf '%s' "$APPLE_CERT" | base64 -D > "$B64_TMP" 2>>"$import_log"; then
+  B64_TMP="$B64_DIR/devid.p12"
+  if ! printf '%s' "$APPLE_CERT" | openssl base64 -d -A > "$B64_TMP" 2>>"$import_log"; then
     echo "FATAL: base64 decode of certificate failed" >&2
     cat "$import_log" >&2
     rm -rf "$B64_DIR"
     exit 1
   fi
-  run_import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign || import_ok=1
+  run_import "$B64_TMP" -k "$KC" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security || import_ok=1
   rm -rf "$B64_DIR"
 fi
 echo "import summary: $(grep -E 'imported|identity' "$import_log" | tail -2 | tr '\n' ' ')"
@@ -68,8 +85,7 @@ if [ "$import_ok" -ne 0 ]; then
   exit 1
 fi
 rm -f "$import_log"
-security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
-security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KC" >/dev/null
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC" >/dev/null
 
 IDENTITY_ALL="$(security find-identity -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
 IDENTITY_CS="$(security find-identity -p codesigning -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
@@ -89,9 +105,8 @@ if [ "${IDENTITY_CS:-0}" -lt 1 ] && [ "${LOGIN_CS:-0}" -lt 1 ]; then
   echo "private keys contained in the p12: ${KEYS_IN_P12}"
   echo "FATAL: no valid codesigning identity after import" >&2
   if [ "${KEYS_IN_P12:-0}" -lt 1 ]; then
-    echo "  -> the apple-certificate credential contains certificates only." >&2
-    echo "  -> re-export the Developer ID p12 WITH the private key and update the credential," >&2
-    echo "     or provision the key in the agent user's login keychain." >&2
+    echo "  -> the apple-certificate credential may lack its private key," >&2
+    echo "     or apple-certificate-password does not match the p12 export." >&2
   fi
   exit 1
 fi
