@@ -157,7 +157,15 @@ else
   # TeamIdentifier: ad-hoc/unsigned show "not set" (or no line at all);
   # Authority= lines are only printed when codesign can resolve the chain
   # against local keychains, which is environment-dependent and unusable.
-  needs_sign() { ! codesign -dv "$1" 2>&1 | grep -qE "^TeamIdentifier=[A-Za-z0-9]{6,}$"; }
+  needs_sign() {
+    # NB: must NOT be `codesign … | grep -q` under pipefail — grep -q exits at
+    # the first match, codesign takes SIGPIPE from its remaining output, and
+    # pipefail turns that into a false "needs signing" for every good binary.
+    # Command substitution drains codesign fully before grepping.
+    local out
+    out="$(codesign -dv "$1" 2>&1)"
+    ! printf '%s\n' "$out" | grep -qE "^TeamIdentifier=[A-Za-z0-9]{6,}$"
+  }
   # Executable list. NB: file(1) emits extra "(for architecture …)" lines for
   # universal binaries — those must be dropped or the cut yields phantom
   # paths and the real fat binaries never get signed.
