@@ -153,12 +153,14 @@ else
   # from the sweep; only loose executables need individual signatures.
   # `codesign --verify` passes for AD-HOC signatures too (conda/pip ship
   # arm64 binaries ad-hoc signed — arm64 requires at least that to execute),
-  # and notarization rejects those. Only a Developer ID authority counts —
-  # and the Authority= chain lines are only printed at -dvv verbosity.
-  has_devid() { codesign -dvv "$1" 2>&1 | grep -q "Authority=Developer ID"; }
+  # and notarization rejects those. The reliable local oracle is
+  # TeamIdentifier: ad-hoc/unsigned show "not set" (or no line at all);
+  # Authority= lines are only printed when codesign can resolve the chain
+  # against local keychains, which is environment-dependent and unusable.
+  needs_sign() { ! codesign -dv "$1" 2>&1 | grep -qE "^TeamIdentifier=[A-Za-z0-9]{6,}$"; }
   SIGNED_N=0
   while IFS= read -r bin; do
-    if ! has_devid "$bin"; then
+    if needs_sign "$bin"; then
       if ! codesign "${SIGN_ARGS[@]}" "$bin" >/dev/null 2>&1; then
         # Fat binary with an unsignable non-native slice: thin to arm64
         # (the bundle is arm64-only) and retry.
@@ -198,9 +200,9 @@ if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
   UNSIGNED_LEFT=0
   DIAG_SHOWN=0
   while IFS= read -r bin; do
-    if ! has_devid "$bin"; then
+    if needs_sign "$bin"; then
       UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1))
-      echo "no Developer ID signature: $bin" >&2
+      echo "no Developer ID team: $bin" >&2
       if [ "$DIAG_SHOWN" -lt 3 ]; then
         DIAG_SHOWN=$((DIAG_SHOWN + 1))
         echo "--- codesign -dv for $bin (first 8 lines):" >&2
