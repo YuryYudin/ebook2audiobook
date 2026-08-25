@@ -158,6 +158,16 @@ else
   # Authority= lines are only printed when codesign can resolve the chain
   # against local keychains, which is environment-dependent and unusable.
   needs_sign() { ! codesign -dv "$1" 2>&1 | grep -qE "^TeamIdentifier=[A-Za-z0-9]{6,}$"; }
+  # Executable list. NB: file(1) emits extra "(for architecture …)" lines for
+  # universal binaries — those must be dropped or the cut yields phantom
+  # paths and the real fat binaries never get signed.
+  list_executables() {
+    find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null \
+      | grep -E "Mach-O.*executable|Mach-O universal" \
+      | cut -d: -f1 \
+      | grep -v " (for architecture" \
+      | sort -u
+  }
   SIGNED_N=0
   while IFS= read -r bin; do
     if needs_sign "$bin"; then
@@ -176,7 +186,7 @@ else
       fi
       SIGNED_N=$((SIGNED_N + 1))
     fi
-  done < <(find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
+  done < <(list_executables)
   echo "nested executables signed: $SIGNED_N"
 
   # The Python interpreter JITs (numba/torch): it alone needs the JIT
@@ -210,7 +220,7 @@ if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
         echo "--- file(1): $(file -b "$bin")" >&2
       fi
     fi
-  done < <(find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
+  done < <(list_executables)
   if [ "$UNSIGNED_LEFT" -gt 0 ]; then
     echo "FATAL: $UNSIGNED_LEFT Mach-O executables without a Developer ID signature" >&2
     exit 1
