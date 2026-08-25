@@ -153,8 +153,9 @@ else
   # from the sweep; only loose executables need individual signatures.
   # `codesign --verify` passes for AD-HOC signatures too (conda/pip ship
   # arm64 binaries ad-hoc signed — arm64 requires at least that to execute),
-  # and notarization rejects those. Only a Developer ID authority counts.
-  has_devid() { codesign -dv "$1" 2>&1 | grep -q "Authority=Developer ID"; }
+  # and notarization rejects those. Only a Developer ID authority counts —
+  # and the Authority= chain lines are only printed at -dvv verbosity.
+  has_devid() { codesign -dvv "$1" 2>&1 | grep -q "Authority=Developer ID"; }
   SIGNED_N=0
   while IFS= read -r bin; do
     if ! has_devid "$bin"; then
