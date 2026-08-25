@@ -90,8 +90,19 @@ fi
 rm -f "$import_log"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC" >/dev/null
 
-IDENTITY_ALL="$(security find-identity -v "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
-IDENTITY_CS="$(security find-identity -v -p codesigning "$KC" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
+count_identities() { # keychain-or-empty, [policy]
+  local kc="$1" pol="${2:-}"
+  local out n
+  if [ -n "$pol" ]; then
+    out="$(security find-identity -v -p "$pol" ${kc:+"$kc"} 2>/dev/null)"
+  else
+    out="$(security find-identity -v ${kc:+"$kc"} 2>/dev/null)"
+  fi
+  n="$(printf '%s\n' "$out" | grep -E '[0-9]+ valid identit' | head -1 | awk '{print $1}')"
+  echo "${n:-0}"
+}
+IDENTITY_ALL="$(count_identities "$KC")"
+IDENTITY_CS="$(count_identities "$KC" codesigning)"
 CERT_COUNT="$(security find-certificate -a "$KC" 2>/dev/null | grep -c '"alis"' || echo 0)"
 KEY_COUNT="$(security find-key "$KC" 2>/dev/null | grep -c '"labl"' || echo 0)"
 echo "keychain contents: certs=${CERT_COUNT} keys=${KEY_COUNT} identities(all)=${IDENTITY_ALL} identities(codesigning)=${IDENTITY_CS}"
@@ -101,7 +112,7 @@ security find-identity -v -p codesigning "$KC" 2>&1 | tail -3
 
 # The p12 may be certificates-only (private key provisioned separately on the
 # agent). Fall back to the agent user's own keychain search list.
-LOGIN_CS="$(security find-identity -p codesigning -v 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)"
+LOGIN_CS="$(count_identities "" codesigning)"
 echo "agent keychain identities(codesigning)=${LOGIN_CS}"
 if [ "${IDENTITY_CS:-0}" -lt 1 ] && [ "${LOGIN_CS:-0}" -lt 1 ]; then
   # Diagnostic: does the p12 itself carry a private key? (count only)
