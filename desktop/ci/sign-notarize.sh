@@ -195,8 +195,18 @@ fi
 codesign --verify --deep --strict "$APP" && echo "signature: valid"
 if [ "${SIGN_MODE:-developer-id}" != "adhoc" ]; then
   UNSIGNED_LEFT=0
+  DIAG_SHOWN=0
   while IFS= read -r bin; do
-    has_devid "$bin" || { UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1)); echo "no Developer ID signature: $bin" >&2; }
+    if ! has_devid "$bin"; then
+      UNSIGNED_LEFT=$((UNSIGNED_LEFT + 1))
+      echo "no Developer ID signature: $bin" >&2
+      if [ "$DIAG_SHOWN" -lt 3 ]; then
+        DIAG_SHOWN=$((DIAG_SHOWN + 1))
+        echo "--- codesign -dv for $bin (first 8 lines):" >&2
+        codesign -dv "$bin" 2>&1 | head -8 >&2
+        echo "--- file(1): $(file -b "$bin")" >&2
+      fi
+    fi
   done < <(find "$APP/Contents" -type d -name "*.app" -prune -o -type f -exec file {} + 2>/dev/null | grep -E "Mach-O[^:]*executable" | cut -d: -f1)
   if [ "$UNSIGNED_LEFT" -gt 0 ]; then
     echo "FATAL: $UNSIGNED_LEFT Mach-O executables without a Developer ID signature" >&2
